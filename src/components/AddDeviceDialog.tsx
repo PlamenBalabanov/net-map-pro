@@ -34,16 +34,7 @@ export const AddDeviceDialog = ({ open, onOpenChange, onAdd }: AddDeviceDialogPr
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onAdd({
-      id: Date.now().toString(),
-      ...formData,
-      x: 300 + Math.random() * 400,
-      y: 200 + Math.random() * 300,
-      status: "up",
-      uptime: "0d 0h",
-      cpu: Math.floor(Math.random() * 60),
-      memory: Math.floor(Math.random() * 80),
-    });
+    onAdd(formData);
     setFormData({
       name: "",
       ip: "",

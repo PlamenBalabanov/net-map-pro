@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { NetworkCanvas } from "@/components/NetworkCanvas";
 import { DevicePanel } from "@/components/DevicePanel";
 import { StatsPanel } from "@/components/StatsPanel";
 import { AddDeviceDialog } from "@/components/AddDeviceDialog";
 import { Activity } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
 type DeviceStatus = "up" | "down" | "warning";
 
@@ -22,117 +24,164 @@ interface Device {
 }
 
 const Index = () => {
+  const { toast } = useToast();
   const [showAddDevice, setShowAddDevice] = useState(false);
-  const [devices, setDevices] = useState<Device[]>([
-    {
-      id: "1",
-      name: "Core Router",
-      ip: "192.168.1.1",
-      x: 200,
-      y: 350,
-      status: "up" as const,
-      type: "router" as const,
-      snmpCommunity: "public",
-      uptime: "45d 12h",
-      cpu: 23,
-      memory: 45,
-    },
-    {
-      id: "2",
-      name: "Distribution Switch",
-      ip: "192.168.1.2",
-      x: 500,
-      y: 200,
-      status: "up" as const,
-      type: "switch" as const,
-      snmpCommunity: "public",
-      uptime: "30d 8h",
-      cpu: 15,
-      memory: 32,
-    },
-    {
-      id: "3",
-      name: "Access Switch 1",
-      ip: "192.168.1.3",
-      x: 800,
-      y: 150,
-      status: "warning" as const,
-      type: "switch" as const,
-      snmpCommunity: "public",
-      uptime: "20d 4h",
-      cpu: 67,
-      memory: 78,
-    },
-    {
-      id: "4",
-      name: "Web Server",
-      ip: "192.168.1.10",
-      x: 1000,
-      y: 350,
-      status: "up" as const,
-      type: "server" as const,
-      snmpCommunity: "public",
-      uptime: "15d 22h",
-      cpu: 42,
-      memory: 56,
-    },
-    {
-      id: "5",
-      name: "Database Server",
-      ip: "192.168.1.11",
-      x: 800,
-      y: 550,
-      status: "up" as const,
-      type: "server" as const,
-      snmpCommunity: "public",
-      uptime: "60d 15h",
-      cpu: 38,
-      memory: 62,
-    },
-  ]);
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [deviceStats, setDeviceStats] = useState<Record<string, any>>({});
 
-  const [links, setLinks] = useState([
-    {
-      id: "l1",
-      source: "1",
-      target: "2",
-      bandwidth: 450.5,
-      maxBandwidth: 1000,
-      status: "healthy" as const,
-    },
-    {
-      id: "l2",
-      source: "2",
-      target: "3",
-      bandwidth: 750.2,
-      maxBandwidth: 1000,
-      status: "warning" as const,
-    },
-    {
-      id: "l3",
-      source: "3",
-      target: "4",
-      bandwidth: 320.8,
-      maxBandwidth: 1000,
-      status: "healthy" as const,
-    },
-    {
-      id: "l4",
-      source: "3",
-      target: "5",
-      bandwidth: 890.5,
-      maxBandwidth: 1000,
-      status: "critical" as const,
-    },
-  ]);
+  const [links, setLinks] = useState<any[]>([]);
 
-  const handleAddDevice = (newDevice: any) => {
-    setDevices([...devices, newDevice]);
+  // Fetch devices and stats from database
+  useEffect(() => {
+    fetchDevices();
+    fetchLinks();
+    
+    // Subscribe to realtime updates
+    const devicesChannel = supabase
+      .channel('devices-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'devices' }, () => {
+        fetchDevices();
+      })
+      .subscribe();
+
+    const statsChannel = supabase
+      .channel('stats-changes')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'device_stats' }, (payload) => {
+        setDeviceStats(prev => ({
+          ...prev,
+          [payload.new.device_id]: payload.new
+        }));
+      })
+      .subscribe();
+
+    const linksChannel = supabase
+      .channel('links-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'links' }, () => {
+        fetchLinks();
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(devicesChannel);
+      supabase.removeChannel(statsChannel);
+      supabase.removeChannel(linksChannel);
+    };
+  }, []);
+
+  // Poll devices every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      pollDevices();
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const fetchDevices = async () => {
+    const { data, error } = await supabase.from('devices').select('*');
+    if (error) {
+      console.error('Error fetching devices:', error);
+      return;
+    }
+
+    // Fetch latest stats for each device
+    const devicesWithStats = await Promise.all(
+      (data || []).map(async (device) => {
+        const { data: stats } = await supabase
+          .from('device_stats')
+          .select('*')
+          .eq('device_id', device.id)
+          .order('timestamp', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        return {
+          id: device.id,
+          name: device.name,
+          ip: device.ip,
+          x: device.x,
+          y: device.y,
+          type: device.type as "router" | "switch" | "server",
+          snmpCommunity: device.snmp_community,
+          status: (stats?.status || 'down') as DeviceStatus,
+          uptime: stats?.uptime || 'N/A',
+          cpu: stats?.cpu || 0,
+          memory: stats?.memory || 0,
+        };
+      })
+    );
+
+    setDevices(devicesWithStats);
   };
 
-  const handleRemoveDevice = (id: string) => {
-    setDevices(devices.filter((d) => d.id !== id));
-    setLinks(links.filter((l) => l.source !== id && l.target !== id));
+  const fetchLinks = async () => {
+    const { data, error } = await supabase.from('links').select('*');
+    if (error) {
+      console.error('Error fetching links:', error);
+      return;
+    }
+
+    setLinks((data || []).map(link => ({
+      id: link.id,
+      source: link.source_device_id,
+      target: link.target_device_id,
+      bandwidth: link.bandwidth,
+      maxBandwidth: link.max_bandwidth,
+      status: link.status,
+    })));
+  };
+
+  const pollDevices = async () => {
+    try {
+      const { error } = await supabase.functions.invoke('snmp-poll');
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error polling devices:', error);
+    }
+  };
+
+  const handleAddDevice = async (deviceData: any) => {
+    const { error } = await supabase.from('devices').insert({
+      name: deviceData.name,
+      ip: deviceData.ip,
+      type: deviceData.type,
+      snmp_community: deviceData.snmpCommunity,
+      x: Math.random() * 1000,
+      y: Math.random() * 500,
+    });
+
+    if (error) {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Device added",
+        description: `${deviceData.name} has been added successfully.`,
+      });
+      setShowAddDevice(false);
+      // Trigger immediate poll of new device
+      pollDevices();
+    }
+  };
+
+  const handleRemoveDevice = async (id: string) => {
+    const { error } = await supabase.from('devices').delete().eq('id', id);
+    
+    if (error) {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Device removed",
+        description: "Device has been removed successfully.",
+      });
+    }
   };
 
   const devicesUp = devices.filter((d) => d.status === "up").length;
