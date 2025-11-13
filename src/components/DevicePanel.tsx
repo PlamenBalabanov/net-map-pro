@@ -2,7 +2,10 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Activity, Wifi, Server, HardDrive } from "lucide-react";
+import { Activity, Wifi, Server, HardDrive, TestTube2 } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
+import { useState } from "react";
 
 interface Device {
   id: string;
@@ -23,6 +26,8 @@ interface DevicePanelProps {
 }
 
 export const DevicePanel = ({ devices, onAddDevice, onRemoveDevice }: DevicePanelProps) => {
+  const { toast } = useToast();
+  const [testingDevice, setTestingDevice] = useState<string | null>(null);
   const getDeviceIcon = (type: string) => {
     switch (type) {
       case "router":
@@ -46,6 +51,27 @@ export const DevicePanel = ({ devices, onAddDevice, onRemoveDevice }: DevicePane
         return "text-destructive";
       default:
         return "text-muted-foreground";
+    }
+  };
+
+  const handleTestSNMP = async (deviceId: string, deviceName: string) => {
+    setTestingDevice(deviceId);
+    try {
+      const { error } = await supabase.functions.invoke('snmp-poll');
+      if (error) throw error;
+      
+      toast({
+        title: "SNMP Test Completed",
+        description: `Successfully polled ${deviceName}. Check device stats for updated values.`,
+      });
+    } catch (error) {
+      toast({
+        title: "SNMP Test Failed",
+        description: error instanceof Error ? error.message : "Failed to poll device",
+        variant: "destructive",
+      });
+    } finally {
+      setTestingDevice(null);
     }
   };
 
@@ -81,7 +107,8 @@ export const DevicePanel = ({ devices, onAddDevice, onRemoveDevice }: DevicePane
               </Button>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 text-xs">
+
+            <div className="grid grid-cols-2 gap-2 text-xs mb-2">
               <div>
                 <span className="text-muted-foreground">Uptime:</span>
                 <p className="text-foreground font-mono">{device.uptime}</p>
@@ -101,6 +128,17 @@ export const DevicePanel = ({ devices, onAddDevice, onRemoveDevice }: DevicePane
                 <p className="text-foreground font-mono">{device.memory}%</p>
               </div>
             </div>
+
+            <Button
+              onClick={() => handleTestSNMP(device.id, device.name)}
+              disabled={testingDevice === device.id}
+              size="sm"
+              variant="outline"
+              className="w-full text-xs"
+            >
+              <TestTube2 className="h-3 w-3 mr-1" />
+              {testingDevice === device.id ? "Testing..." : "Test SNMP"}
+            </Button>
           </Card>
         ))}
       </div>
