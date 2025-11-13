@@ -1,1 +1,4 @@
 project_id = "imqqwneocdrqinkrxadf"
+
+[functions.snmp-poll]
+verify_jwt = false
